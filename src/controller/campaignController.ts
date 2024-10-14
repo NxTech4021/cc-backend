@@ -2159,7 +2159,7 @@ export const saveCampaign = async (req: Request, res: Response) => {
       },
     });
 
-    return res.status(200).json({ message: `Campaign ${bookmark.campaign?.name} has been bookmark` });
+    return res.status(200).json({ message: `Campaign ${bookmark.campaign?.name} has been bookmarked.` });
   } catch (error) {
     console.log(error);
     return res.status(400).json(error);
@@ -2181,7 +2181,7 @@ export const unSaveCampaign = async (req: Request, res: Response) => {
 
     return res
       .status(200)
-      .json({ message: `Campaign ${bookmark.campaign?.name} has been remove from saved campaigns` });
+      .json({ message: `Campaign ${bookmark.campaign?.name} has been removed from your saved campaigns.` });
   } catch (error) {
     //console.log(error);
     return res.status(400).json(error);
