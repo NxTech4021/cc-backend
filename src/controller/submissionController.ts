@@ -216,14 +216,8 @@ export const adminManageAgreementSubmission = async (req: Request, res: Response
         },
       });
 
-      await prisma.feedback.upsert({
-        where: {
-          submissionId: submission.id,
-        },
-        update: {
-          content: feedback,
-        },
-        create: {
+      await prisma.feedback.create({
+        data: {
           content: feedback,
           submissionId: submission.id,
           adminId: req.session.userid as string,
@@ -303,16 +297,16 @@ export const draftSubmission = async (req: Request, res: Response) => {
       return res.status(404).json({ message: 'Submission not found' });
     }
 
-    const inReviewColumn = await getColumnId({ userId: userid, columnName: 'In Review' });
+    // const inReviewColumn = await getColumnId({ userId: userid, columnName: 'In Review' });
 
-    await prisma.task.update({
-      where: {
-        id: submission.task?.id,
-      },
-      data: {
-        columnId: inReviewColumn,
-      },
-    });
+    // await prisma.task.update({
+    //   where: {
+    //     id: submission.task?.id,
+    //   },
+    //   data: {
+    //     columnId: inReviewColumn,
+    //   },
+    // });
 
     const file = (req.files as any).draftVideo;
 
@@ -339,14 +333,12 @@ export const draftSubmission = async (req: Request, res: Response) => {
         persistent: true,
       },
     );
-    //console.log(`Sent video processing task to queue: draft`);
 
     await channel.close();
     await amqp.close();
 
     return res.status(200).json({ message: 'Video start processing' });
   } catch (error) {
-    //console.log(error);
     return res.status(400).json(error);
   }
 };
@@ -379,9 +371,14 @@ export const adminManageDraft = async (req: Request, res: Response) => {
           status: 'APPROVED',
           isReview: true,
           feedback: feedback && {
+            create: {
+              type: 'COMMENT',
+              content: feedback,
+              adminId: req.session.userid as string,
+            },
             upsert: {
               where: {
-                id: submission?.feedback?.id,
+                id: submission?.feedback?.[0]?.id,
               },
               update: {
                 content: feedback,
@@ -491,25 +488,31 @@ export const adminManageDraft = async (req: Request, res: Response) => {
           status: 'CHANGES_REQUIRED',
           isReview: true,
           feedback: {
-            upsert: {
-              where: {
-                id: submission?.feedback?.id,
+            create: {
+              type: 'REASON',
+              reasons: reasons,
+              content: feedback,
+              admin: {
+                connect: { id: req.session.userid },
               },
-              update: {
-                reasons: reasons,
-                content: feedback,
-                admin: {
-                  connect: { id: req.session.userid },
-                },
-              },
-              create: {
-                type: 'REASON',
-                reasons: reasons,
-                content: feedback,
-                admin: {
-                  connect: { id: req.session.userid },
-                },
-              },
+              // where: {
+              //   id: submission?.feedback?.id,
+              // },
+              // data: {
+              // reasons: reasons,
+              // content: feedback,
+              // admin: {
+              //   connect: { id: req.session.userid },
+              // },
+              // },
+              // create: {
+              //   type: 'REASON',
+              //   reasons: reasons,
+              //   content: feedback,
+              //   admin: {
+              //     connect: { id: req.session.userid },
+              //   },
+              // },
             },
           },
         },
@@ -573,6 +576,7 @@ export const adminManageDraft = async (req: Request, res: Response) => {
       return res.status(200).json({ message: 'Succesfully submitted.' });
     }
   } catch (error) {
+    console.log(error);
     return res.status(400).json(error);
   }
 };
@@ -765,3 +769,4 @@ export const adminManagePosting = async (req: Request, res: Response) => {
     return res.status(400).json(error);
   }
 };
+
