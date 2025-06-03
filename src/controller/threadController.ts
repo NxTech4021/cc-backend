@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { markMessagesService, fetchMessagesFromThread, totalUnreadMessagesService } from '@services/threadService';
 import { clients, io } from '../server';
+import { uploadImage, uploadAgreementForm, uploadPitchVideo } from '@configs/cloudStorage.config';
 import { notificationCSMChat, notificationGroupChat } from '@helper/notification';
 import { saveNotification } from './notificationController';
 
@@ -122,7 +123,7 @@ export const unarchiveThread = async (req: Request, res: Response) => {
   }
 };
 
-export const getUserThreads = async (_req: Request, res: Response) => {
+export const getUserThreads = async (req: Request, res: Response) => {
   try {
     const userThreads = await prisma.userThread.findMany({
       include: {
@@ -130,6 +131,12 @@ export const getUserThreads = async (_req: Request, res: Response) => {
         thread: true,
       },
     });
+  
+
+    // Extract only the thread data
+    const threads = userThreads.map((userThread) => userThread.thread);
+
+    res.status(200).json(threads);
     res.status(200).json(userThreads);
   } catch (error) {
     console.error(error);
@@ -225,16 +232,49 @@ export const addUserToThread = async (req: Request, res: Response) => {
 export const sendMessageInThread = async (req: Request, res: Response) => {
   const { threadId, content } = req.body as SendMessageParams;
   const userId = req.session.userid;
-
+  
+  
+  console.log("Fileeess", req.files); // Log the uploaded files for debugging
+  
   try {
-    if (!userId) {
-      return res.status(400).json({ error: 'Missing sender information.' });
+    let fileURL: string | null = null;
+    let fileType: string | null = null;
+  
+    if (req.files && req.files.file) {
+      const file = req.files.file; 
+    
+      if (file && !Array.isArray(file)) {
+        const { mimetype, tempFilePath, name } = file;
+    
+        console.log("File received:", file);
+    
+        if (mimetype.startsWith('image/')) {
+          fileURL = await uploadImage(tempFilePath, name, 'chat-images');
+          fileType = mimetype;
+        } else if (mimetype.startsWith('video/')) {
+          fileURL = await uploadPitchVideo(tempFilePath, name, 'chat-videos');
+          fileType = mimetype;
+        } else if (mimetype === 'application/pdf') {
+          fileURL = await uploadAgreementForm(tempFilePath, name, 'chat-pdfs');
+          fileType = mimetype;
+        } else {
+          console.log('Unsupported file type:', mimetype);
+        }
+      } else {
+        console.error('File is not an expected object');
+      }
+    } else {
+      console.log('No file uploaded');
     }
+     
+    console.log('Generated URL:', fileURL);
 
     const datas = await prisma.$transaction(async (tx) => {
       const message = await tx.message.create({
         data: {
-          content,
+          content: content,  
+          file: fileURL,
+          fileType: fileType,
           threadId,
           senderId: userId,
           createdAt: new Date(),
@@ -254,7 +294,53 @@ export const sendMessageInThread = async (req: Request, res: Response) => {
           unreadMessages: true,
         },
       });
+
+      const unreadMessageData = data.UserThread
+        .filter((thread) => thread.user.id !== userId)
+        .map((thread) => ({
+          userId: thread.user.id,
+          threadId,
+          messageId: message.id,
+        }));
+
+      console.log("Data to create for unread messages:", unreadMessageData);
+
+      if (unreadMessageData.length > 0) {
+        try {
+          await tx.unreadMessage.createMany({
+            data: unreadMessageData,
+          });
+          console.log("Unread messages created successfully");
+        } catch (error) {
+          console.error("Error creating unread messages:", error);
+        }
+      }
+
+      console.log ( " Unread data", unreadMessageData)
+
       return { data, message };
+    });
+
+   
+
+    io.to(threadId).emit('message', {
+      senderId: userId,
+      threadId,
+      content,
+      file: fileURL,   
+      fileType,
+      sender: { role: 'user', name: 'User', photoURL: '' },
+      createdAt: new Date().toISOString(),
+    });
+
+    console.log("Emitting message to thread:", {
+      senderId: userId,
+      threadId,
+      content,
+      file: fileURL,
+      fileType,
+      sender: { role: 'user', name: 'User', photoURL: '' },
+      createdAt: new Date().toISOString(),
     });
 
     const userIds = datas.data.UserThread.map((thread) => thread.user.id);
@@ -305,27 +391,25 @@ export const sendMessageInThread = async (req: Request, res: Response) => {
       },
     });
 
+    console.log("UnreadMessage aggregation result:", unreadMessages);
+
     const unreadCountMap = new Map(unreadMessages.map((count) => [count.userId, count._count]));
     const senderInformation = datas.data.UserThread.find((elem) => elem.userId === userId);
 
     for (const thread of datas.data.UserThread.filter((elem) => elem.userId !== userId)) {
       const count = unreadCountMap.get(thread.user.id) || 0;
 
+      console.log('Emitting messageCount:', {
+        count,
+        name: senderInformation?.user.name,
+      });
+      
       io.to(clients.get(thread.user.id)).emit('messageCount', { count, name: senderInformation?.user.name });
     }
 
-    // for (const thread of data.UserThread) {
-    //   const unreadCount = await prisma.unreadMessage.count({
-    //     where: {
-    //       userId: thread.user.id,
-    //       threadId,
-    //     },
-    //   });
-
-    //   io.to(clients.get(thread.user.id)).emit('messageCount', { count: unreadCount });
-    // }
-
-    return res.status(201).json(datas.message);
+    console.log ("Datas created", datas.message)
+    return res.status(200).json( datas.message);
+    // return res.status(201).json(datas.message);
   } catch (error) {
     console.log(error);
     return res.status(400).json({ error: 'An error occurred while sending the message.' });
@@ -401,6 +485,7 @@ export const getTotalUnreadMessageCount = async (req: Request, res: Response) =>
   }
 };
 
+
 // Mark a message as read
 export const markMessagesAsSeen = async (req: Request, res: Response) => {
   const { threadId } = req.params;
@@ -418,3 +503,5 @@ export const markMessagesAsSeen = async (req: Request, res: Response) => {
     res.status(500).json({ error: 'An error occurred while marking messages as seen.' });
   }
 };
+
+
